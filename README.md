@@ -90,24 +90,25 @@ open http://localhost:15672
 
 ### Phase 2: 環境構築
 - [04-environment-setup.md](docs/04-environment-setup.md) - 環境セットアップ
+- [05-exception-handling.md](docs/05-exception-handling.md) - 例外処理設計
 
 ### Phase 3: レイヤー別実装
-- [05-domain-layer.md](docs/05-domain-layer.md) - ドメイン層実装
-- [06-application-layer.md](docs/06-application-layer.md) - アプリケーション層実装
-- [07-infrastructure-layer.md](docs/07-infrastructure-layer.md) - インフラ層実装
-- [08-presentation-layer.md](docs/08-presentation-layer.md) - プレゼンテーション層実装
+- [06-domain-layer.md](docs/06-domain-layer.md) - ドメイン層実装
+- [07-application-layer.md](docs/07-application-layer.md) - アプリケーション層実装
+- [08-infrastructure-layer.md](docs/08-infrastructure-layer.md) - インフラ層実装
+- [09-presentation-layer.md](docs/09-presentation-layer.md) - プレゼンテーション層実装
 
 ### Phase 4: 機能実装
-- [09-user-management.md](docs/09-user-management.md) - ユーザー管理機能
-- [10-channel-management.md](docs/10-channel-management.md) - チャンネル管理機能
-- [11-message-api.md](docs/11-message-api.md) - メッセージAPI
-- [12-realtime-notification.md](docs/12-realtime-notification.md) - リアルタイム通知
-- [13-batch-processing.md](docs/13-batch-processing.md) - バッチ処理
-- [14-web-ui.md](docs/14-web-ui.md) - Web UI
+- [10-user-management.md](docs/10-user-management.md) - ユーザー管理機能
+- [11-channel-management.md](docs/11-channel-management.md) - チャンネル管理機能
+- [12-message-api.md](docs/12-message-api.md) - メッセージAPI
+- [13-realtime-notification.md](docs/13-realtime-notification.md) - リアルタイム通知
+- [14-batch-processing.md](docs/14-batch-processing.md) - バッチ処理
+- [15-web-ui.md](docs/15-web-ui.md) - Web UI
 
 ### Phase 5: テスト・デプロイ
-- [15-testing.md](docs/15-testing.md) - テスト実装
-- [16-local-deployment.md](docs/16-local-deployment.md) - ローカルデプロイ
+- [16-testing.md](docs/16-testing.md) - テスト実装
+- [17-local-deployment.md](docs/17-local-deployment.md) - ローカルデプロイ
 
 ## プロジェクト構造
 
@@ -171,9 +172,11 @@ docker exec -it minislack-postgres psql -U minislack -d minislack
 2. **アーキテクチャを理解する** (`docs/02-architecture-overview.md`)
 3. **ドメインモデルを理解する** (`docs/03-domain-model.md`)
 4. **環境構築** (`docs/04-environment-setup.md`)
-5. **各レイヤーを順番に実装** (ドメイン → アプリケーション → インフラ → プレゼンテーション)
-6. **機能を段階的に実装** (ユーザー管理 → チャンネル管理 → メッセージ → ...)
-7. **テストを書く** (`docs/15-testing.md`)
+5. **例外処理を理解する** (`docs/05-exception-handling.md`)
+6. **各レイヤーを順番に実装** (`docs/06-domain-layer.md`〜`docs/09-presentation-layer.md`)
+7. **機能を段階的に実装** (ユーザー管理 → チャンネル管理 → メッセージ → RabbitMQ → バッチ → Web UI)
+8. **テストを書く** (`docs/16-testing.md`)
+9. **デプロイする** (`docs/17-local-deployment.md`)
 
 ## トラブルシューティング
 
