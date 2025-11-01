@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: minislack-postgres
+    environment:
+      POSTGRES_DB: minislack
+      POSTGRES_USER: minislack
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - minislack-network
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    container_name: minislack-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: minislack
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - minislack-network
+
+volumes:
+  postgres-data:
+  rabbitmq-data:
+
+networks:
+  minislack-network:
+    driver: bridge
