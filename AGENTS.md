@@ -70,6 +70,27 @@ docs/           # ドキュメント
 - 使用例を含める
 - READMEを最新に保つ
 
+## Jujutsu: PRレビュー修正時のルール
+
+### 原則：コミット方法はユーザーが選択
+
+PRレビューで修正を適用した後、AIエージェントは**必ずユーザーに確認**:
+
+```
+⚠️ レビュー修正完了。コミット方法を選択してください：
+
+A) 既存コミットに統合（squash）→ force push必要
+B) 新規コミット追加（推奨）→ force push不要
+
+どちらを選択しますか？（デフォルト: B）
+```
+
+**禁止事項**:
+- ❌ ユーザー確認なしで`jj squash`実行
+- ❌ ユーザー確認なしでforce push必要な操作実行
+
+詳細は `/Users/arigatatsuya/Work/git/jujutsu-practice/docs/cursor/user-rules.md` を参照
+
 ## Claude Code 連携ガイド
 
 ### 目的
