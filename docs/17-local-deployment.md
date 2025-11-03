@@ -70,7 +70,7 @@ spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/minislack
     username: minislack
-    password: ${DB_PASSWORD:password}
+    password: ${DB_PASSWORD}  # デフォルト値なし（環境変数必須）
     hikari:
       maximum-pool-size: 20
       minimum-idle: 10
@@ -87,7 +87,7 @@ spring:
     host: localhost
     port: 5672
     username: minislack
-    password: ${RABBITMQ_PASSWORD:password}
+    password: ${RABBITMQ_PASSWORD}  # デフォルト値なし（環境変数必須）
 
 server:
   port: 8080
@@ -96,7 +96,7 @@ server:
     min-response-size: 1024
 
 jwt:
-  secret: ${JWT_SECRET}  # 環境変数から取得（必須）
+  secret: ${JWT_SECRET}  # デフォルト値なし（環境変数必須）
   expiration: 86400000
 
 logging:
@@ -111,18 +111,64 @@ logging:
 
 ### 3.3 環境変数の設定
 
+**⚠️ セキュリティ重要事項**:
+
+本番環境の`application-prod.yml`では、パスワード等にデフォルト値を設定していません。これは**fail-fast**（即座に失敗）戦略です。
+
+**理由**:
+- ❌ `${DB_PASSWORD:password}`: デフォルト値があると、環境変数未設定でも起動してしまう（セキュリティリスク）
+- ✅ `${DB_PASSWORD}`: デフォルト値なしだと、環境変数未設定時に起動失敗（安全）
+
+**環境変数の生成例**:
+
+```bash
+# JWT_SECRET生成（256ビット以上）
+openssl rand -base64 32
+# 出力例: Xn2r5u8x/A?D(G+KbPeShVmYq3t6w9z$
+
+# 強力なパスワード生成
+openssl rand -base64 24
+# 出力例: 7vN9zR4mK2pL8qW6xY1aC0bD
+```
+
+**環境変数の設定**:
+
 ```bash
 # .envファイルを作成
 cat > .env << 'EOF'
-DB_PASSWORD=your_secure_password
-RABBITMQ_PASSWORD=your_rabbitmq_password
-JWT_SECRET=your_jwt_secret_key_at_least_256_bits
+# データベースパスワード（強力なランダム文字列）
+DB_PASSWORD=7vN9zR4mK2pL8qW6xY1aC0bD
+
+# RabbitMQパスワード
+RABBITMQ_PASSWORD=9fG3hJ6nM8rT2wX5yB4cE1aF
+
+# JWT秘密鍵（256ビット以上）
+JWT_SECRET=Xn2r5u8x/A?D(G+KbPeShVmYq3t6w9z$C&F)J@NcRfUjXn2r5u8x
 EOF
+
+# パーミッション設定（重要）
+chmod 600 .env
 
 # 環境変数を読み込んで実行
 export $(cat .env | xargs)
 java -jar build/libs/minislack-0.0.1-SNAPSHOT.jar --spring.profiles.active=prod
 ```
+
+**環境変数が未設定の場合の動作**:
+```
+Error starting ApplicationContext. To display the conditions report re-run your application with 'debug' enabled.
+ERROR: Failed to bind properties under 'spring.datasource.password' to java.lang.String:
+
+    Reason: Could not resolve placeholder 'DB_PASSWORD' in value "${DB_PASSWORD}"
+```
+
+このエラーにより、パスワード未設定での起動を防げます（fail-fast）。
+
+**本番環境での推奨事項**:
+1. 環境変数は必ず設定
+2. `.env`ファイルは`.gitignore`に追加
+3. Kubernetes Secretsやパラメータストアを使用
+4. パスワードローテーションの実施
 
 ---
 

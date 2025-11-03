@@ -267,6 +267,58 @@ public interface UserEntityMapperMapStruct {
 }
 ```
 
+### MapStructとは？
+
+**MapStruct**は、Javaのオブジェクト間マッピングを自動生成するコード生成ライブラリです。
+
+**問題**: 手動マッピングは冗長で保守が大変
+```java
+// 手動マッピング（20行以上）
+public UserJpaEntity toJpaEntity(User user) {
+    UserJpaEntity entity = new UserJpaEntity();
+    entity.setUserId(user.getUserId().getValue());
+    entity.setUsername(user.getUsername().getValue());
+    entity.setEmail(user.getEmail().getValue());
+    // ... あと10個のフィールド
+    return entity;
+}
+```
+
+**解決**: MapStructで自動生成
+```java
+// インターフェースを定義するだけ
+@Mapper(componentModel = "spring")
+public interface UserEntityMapper {
+    UserJpaEntity toJpaEntity(User user);
+}
+// ↑ コンパイル時に実装クラスが自動生成される
+```
+
+**メリット**:
+- ✅ **ボイラープレートコード削減**: Getter/Setterの羅列が不要
+- ✅ **タイプセーフ**: コンパイル時にチェック（リフレクション不使用）
+- ✅ **高速**: 生成されたコードは手書きと同等のパフォーマンス
+- ✅ **保守性**: フィールド追加時も自動対応
+
+**デメリット**:
+- △ 学習コスト: アノテーションの理解が必要
+- △ 複雑な変換: 値オブジェクト変換は`expression`で手動記述
+
+**このプロジェクトでの推奨**:
+- **学習フェーズ**: 手動マッピング（仕組みを理解するため）
+- **実践フェーズ**: MapStruct導入（効率化）
+
+**依存関係**（build.gradleに追加済み）:
+```groovy
+implementation 'org.mapstruct:mapstruct:1.5.5.Final'
+annotationProcessor 'org.mapstruct:mapstruct-processor:1.5.5.Final'
+annotationProcessor 'org.projectlombok:lombok-mapstruct-binding:0.2.0'
+```
+
+**参考資料**:
+- [MapStruct公式サイト](https://mapstruct.org/)
+- [MapStruct Reference Guide](https://mapstruct.org/documentation/stable/reference/html/)
+
 ---
 
 ## 5. リポジトリ実装

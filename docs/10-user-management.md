@@ -501,19 +501,83 @@ GET http://localhost:8080/api/v1/users/{{userId}}
 
 ## 11. 単体テストの実装
 
-### 11.1 ドメイン層のテスト
+### 11.1 テスト用設定ファイル
+
+統合テストを実行する前に、テスト用のデータベース設定が必要です。
+
+**ファイル**: `src/test/resources/application-test.yml`
+
+```yaml
+spring:
+  # H2インメモリデータベース（テスト用）
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: 
+
+  # JPA設定
+  jpa:
+    hibernate:
+      ddl-auto: create-drop  # テストごとにテーブル作成・削除
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+
+  # RabbitMQ（テスト用・埋め込みまたはTestcontainers使用）
+  rabbitmq:
+    host: localhost
+    port: 5672
+
+  # SQL初期化
+  sql:
+    init:
+      mode: never
+
+# ログ設定
+logging:
+  level:
+    root: INFO
+    com.minislack: DEBUG
+    org.springframework.test: INFO
+    org.hibernate.SQL: DEBUG
+```
+
+**重要なポイント**:
+
+1. **H2 Database**: 
+   - インメモリDB（高速、テスト後に自動削除）
+   - PostgreSQLの代わりに使用
+   
+2. **ddl-auto: create-drop**: 
+   - テスト開始時にテーブル作成
+   - テスト終了時に削除
+   - テスト間の干渉を防ぐ
+
+3. **@ActiveProfiles("test")**: 
+   - テストクラスでこのアノテーションを使用
+   - `application-test.yml`が読み込まれる
+
+**H2 Databaseの依存関係**（build.gradleに追加済み）:
+```groovy
+testImplementation 'com.h2database:h2'
+```
+
+### 11.2 ドメイン層のテスト
 
 **ファイル**: `src/test/java/com/minislack/domain/model/user/UsernameTest.java`
 
 （`06-domain-layer.md`を参照）
 
-### 11.2 アプリケーション層のテスト
+### 11.3 アプリケーション層のテスト
 
 **ファイル**: `src/test/java/com/minislack/application/user/UserRegistrationServiceTest.java`
 
 （`07-application-layer.md`を参照）
 
-### 11.3 統合テスト
+### 11.4 統合テスト
 
 **ファイル**: `src/test/java/com/minislack/presentation/api/user/UserControllerIntegrationTest.java`
 
@@ -621,6 +685,264 @@ Hibernate:
         (created_at, display_name, email, password_hash, updated_at, username, user_id) 
     values
         (?, ?, ?, ?, ?, ?, ?)
+```
+
+### 12.3 運用を想定したログフォーマット（Splunk対応）
+
+**Q: Splunkなどのログ分析ツールで可視化・集計しやすいログフォーマットは？**
+
+**A: JSON形式の構造化ログが最適**
+
+#### 12.3.1 Logback設定（JSON形式）
+
+**ファイル**: `src/main/resources/logback-spring.xml`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- コンソール出力（開発用） -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- JSON形式ファイル出力（本番用・Splunk対応） -->
+    <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>logs/minislack.json</file>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <!-- カスタムフィールド追加 -->
+            <customFields>{"application":"minislack","environment":"production"}</customFields>
+            
+            <!-- MDC（Mapped Diagnostic Context）を含める -->
+            <includeMdcKeyName>userId</includeMdcKeyName>
+            <includeMdcKeyName>requestId</includeMdcKeyName>
+            <includeMdcKeyName>channelId</includeMdcKeyName>
+        </encoder>
+        
+        <!-- ローテーション設定 -->
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/minislack-%d{yyyy-MM-dd}.json.gz</fileNamePattern>
+            <maxHistory>30</maxHistory>
+            <totalSizeCap>10GB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- ルートロガー -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="JSON_FILE"/>
+    </root>
+    
+    <!-- アプリケーション専用ロガー -->
+    <logger name="com.minislack" level="DEBUG" additivity="false">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="JSON_FILE"/>
+    </logger>
+</configuration>
+```
+
+**依存関係**（build.gradleに追加）:
+```groovy
+// Logstash Encoder（JSON形式ログ）
+implementation 'net.logstash.logback:logstash-logback-encoder:7.4'
+```
+
+#### 12.3.2 JSON形式ログの出力例
+
+```json
+{
+  "@timestamp": "2025-11-01T12:34:56.789+09:00",
+  "level": "INFO",
+  "logger_name": "com.minislack.application.user.UserRegistrationService",
+  "thread_name": "http-nio-8080-exec-1",
+  "message": "User registered successfully",
+  "application": "minislack",
+  "environment": "production",
+  "userId": "550e8400-e29b-41d4-a716-446655440000",
+  "requestId": "abc123-def456-ghi789",
+  "stack_trace": null
+}
+```
+
+#### 12.3.3 MDC（Mapped Diagnostic Context）の活用
+
+**MDCとは**: スレッドローカルなコンテキスト情報をログに自動付与する仕組み
+
+**実装例**: リクエストIDフィルター
+
+**ファイル**: `src/main/java/com/minislack/infrastructure/logging/RequestIdFilter.java`
+
+```java
+package com.minislack.infrastructure.logging;
+
+import java.io.IOException;
+import java.util.UUID;
+
+import org.slf4j.MDC;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Component;
+
+import jakarta.servlet.Filter;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
+
+/**
+ * リクエストIDをMDCに設定するフィルター
+ */
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE)
+public class RequestIdFilter implements Filter {
+
+    private static final String REQUEST_ID_HEADER = "X-Request-ID";
+    private static final String MDC_REQUEST_ID_KEY = "requestId";
+
+    @Override
+    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+            throws IOException, ServletException {
+        HttpServletRequest httpRequest = (HttpServletRequest) request;
+        
+        try {
+            // リクエストIDの取得または生成
+            String requestId = httpRequest.getHeader(REQUEST_ID_HEADER);
+            if (requestId == null || requestId.isEmpty()) {
+                requestId = UUID.randomUUID().toString();
+            }
+            
+            // MDCに設定（以降のすべてのログに自動付与）
+            MDC.put(MDC_REQUEST_ID_KEY, requestId);
+            
+            chain.doFilter(request, response);
+        } finally {
+            // リクエスト終了時にクリア（メモリリーク防止）
+            MDC.clear();
+        }
+    }
+}
+```
+
+**使用例**: アプリケーションコードでMDCを設定
+
+```java
+@Service
+public class UserRegistrationService {
+    private static final Logger logger = LoggerFactory.getLogger(UserRegistrationService.class);
+
+    @Transactional
+    public UserId registerUser(RegisterUserCommand command) {
+        // ユーザーIDをMDCに設定
+        UserId userId = UserId.newId();
+        MDC.put("userId", userId.getValue());
+        
+        try {
+            logger.info("Starting user registration");
+            // ... ビジネスロジック ...
+            logger.info("User registered successfully");
+            return userId;
+        } finally {
+            MDC.remove("userId");
+        }
+    }
+}
+```
+
+#### 12.3.4 Splunkでのログ分析例
+
+**検索クエリ例**:
+
+```
+# 特定ユーザーのアクション追跡
+index=minislack userId="550e8400-..."
+
+# エラーログの集計
+index=minislack level=ERROR | stats count by logger_name
+
+# レスポンスタイムの分析
+index=minislack message="Request completed" | stats avg(duration) by endpoint
+
+# 特定期間のユーザー登録数
+index=minislack message="User registered successfully" earliest=-24h | stats count by _time span=1h
+```
+
+#### 12.3.5 ログのベストプラクティス
+
+**1. 構造化ログ（JSON）を使う**
+- ✅ Splunkで検索・集計が容易
+- ✅ フィールドごとにインデックス可能
+- ❌ 人間が読みにくい → 開発環境はテキスト形式併用
+
+**2. コンテキスト情報を付与（MDC）**
+- ✅ requestId: リクエスト全体を追跡
+- ✅ userId: ユーザー行動を追跡
+- ✅ transactionId: トランザクション境界を追跡
+
+**3. ログレベルを適切に使い分ける**
+```java
+logger.error("Critical error occurred", exception);  // 即座に対応必要
+logger.warn("Duplicate email attempt: {}", email);   // 監視対象
+logger.info("User registered: {}", userId);          // ビジネスイベント
+logger.debug("Validating email format: {}", email);  // デバッグ用
+```
+
+**4. 機密情報を含めない**
+```java
+// ❌ NG: パスワードをログ出力
+logger.info("Login attempt: user={}, password={}", username, password);
+
+// ✅ OK: 機密情報は除外
+logger.info("Login attempt: user={}", username);
+```
+
+**5. 例外は必ずスタックトレースを含める**
+```java
+// ❌ NG: メッセージのみ
+logger.error("Error: " + e.getMessage());
+
+// ✅ OK: 例外オブジェクトを渡す
+logger.error("User registration failed", e);
+```
+
+**6. パフォーマンスを考慮**
+```java
+// ❌ NG: 文字列結合（不要な処理）
+logger.debug("User data: " + expensiveOperation());
+
+// ✅ OK: プレースホルダー使用（DEBUG無効時は実行されない）
+logger.debug("User data: {}", expensiveOperation());
+
+// ✅ さらに良い: isDebugEnabled()で条件分岐
+if (logger.isDebugEnabled()) {
+    logger.debug("User data: {}", expensiveOperation());
+}
+```
+
+#### 12.3.6 環境別ログ設定
+
+**開発環境**: 
+- コンソール出力
+- テキスト形式
+- DEBUGレベル
+
+**本番環境**:
+- ファイル出力
+- JSON形式
+- INFOレベル
+- ローテーション設定
+
+**設定切り替え**:
+```xml
+<!-- logback-spring.xml -->
+<springProfile name="dev">
+    <appender-ref ref="CONSOLE"/>
+</springProfile>
+
+<springProfile name="prod">
+    <appender-ref ref="JSON_FILE"/>
+</springProfile>
 ```
 
 ---
