@@ -623,33 +623,129 @@ com.minislack/
 
 ### 6.1 テスト容易性
 
+#### なぜドメイン層はモック不要なのか？
+
+ドメイン層のテストがモック不要な理由は、**外部依存が一切ない（Pure Java）**ためです。
+
+**ドメイン層が依存しないもの**:
+- ❌ データベース（JPA/Hibernateなど）
+- ❌ フレームワーク（Spring等）
+- ❌ 外部API
+- ❌ ファイルシステム
+- ❌ その他のインフラストラクチャ
+
+つまり、**単純なJavaクラス**なので、`new`でインスタンス化してそのままテストできます。
+
+#### 自己完結したビジネスロジック
+
+例えば、`User`エンティティの`changePassword()`メソッド：
+
+```java
+// ビジネスロジック: パスワード変更
+public void changePassword(@NonNull Password currentPassword, @NonNull Password newPassword) {
+    if (!this.password.matches(currentPassword)) {
+        throw new IllegalArgumentException("Current password is incorrect");
+    }
+    this.password = Objects.requireNonNull(newPassword, "newPassword must not be null");
+    this.updatedAt = LocalDateTime.now();
+}
+```
+
+このメソッドは：
+- ✅ データベースアクセス不要
+- ✅ 外部サービス呼び出し不要
+- ✅ 単純な値の比較と更新のみ
+
+#### テスト例の比較
+
 **ドメイン層のテスト**（モック不要）:
 ```java
 @Test
 void testPasswordChange() {
     // モックなしでテスト可能
-    User user = new User(/* ... */);
-    Password newPassword = new Password(/* ... */);
+    UserId userId = UserId.newId();
+    Username username = new Username("testuser");
+    Email email = new Email("test@example.com");
+    Password currentPassword = new Password("hashedPassword1");
+    DisplayName displayName = new DisplayName("Test User");
     
+    User user = new User(userId, username, email, currentPassword, displayName);
+    Password newPassword = new Password("hashedPassword2");
+    
+    // 実オブジェクトで直接テスト
     user.changePassword(currentPassword, newPassword);
     
     assertTrue(user.getPassword().matches(newPassword));
 }
 ```
 
+→ **実際のオブジェクトを作って、メソッドを呼ぶだけ！**
+
 **アプリケーション層のテスト**（リポジトリをモック）:
 ```java
 @Test
 void testUserRegistration() {
+    // リポジトリ（データベースアクセス）をモック化
     IUserRepository mockRepo = mock(IUserRepository.class);
-    when(mockRepo.existsByEmail(any())).thenReturn(false);
+    IPasswordEncoder mockEncoder = mock(IPasswordEncoder.class);
     
-    UserRegistrationService service = new UserRegistrationService(mockRepo, encoder);
+    when(mockRepo.existsByEmail(any())).thenReturn(false);
+    when(mockRepo.existsByUsername(any())).thenReturn(false);
+    when(mockEncoder.encode(any())).thenReturn("hashedPassword");
+    
+    UserRegistrationService service = new UserRegistrationService(mockRepo, mockEncoder);
     UserId userId = service.registerUser(command);
     
     verify(mockRepo).save(any(User.class));
 }
 ```
+
+→ **外部依存（リポジトリ）をモックで差し替える必要がある**
+
+#### 依存性の方向が重要
+
+```java
+// ドメイン層: インターフェースのみ定義（実装を持たない）
+public interface IUserRepository {
+    User save(User user);
+    Optional<User> findById(UserId userId);
+}
+
+// ドメインエンティティ: リポジトリを使わない
+public class User {
+    public void changePassword(Password current, Password newPass) {
+        // リポジトリ呼び出しなし！
+        // 純粋なビジネスロジックのみ
+        if (!this.password.matches(current)) {
+            throw new IllegalArgumentException("Incorrect password");
+        }
+        this.password = newPass;
+    }
+}
+
+// アプリケーション層: リポジトリを使う（だからモックが必要）
+public class UserRegistrationService {
+    private final IUserRepository repository; // ← 外部依存
+    
+    @Transactional
+    public UserId registerUser(RegisterUserCommand cmd) {
+        User user = new User(...);
+        repository.save(user); // ← これがあるからモックが必要
+        return user.getUserId();
+    }
+}
+```
+
+#### レイヤー別のテスト戦略まとめ
+
+| レイヤー | 外部依存 | テスト方法 | テスト速度 |
+|---------|---------|-----------|-----------|
+| **Domain** | なし（Pure Java） | モック不要、実オブジェクトで直接テスト | 超高速 ⚡️ |
+| **Application** | あり（Repository等） | モック必要（外部依存を差し替え） | 高速 |
+| **Infrastructure** | あり（DB、外部API等） | 統合テストまたはTestcontainers等 | 低速 |
+| **Presentation** | あり（HTTP、JSON等） | MockMvc、WebTestClient等 | 中速 |
+
+**ポイント**: ドメイン層がPure Javaで自己完結しているからこそ、超高速でテストでき、ビジネスロジックの検証に集中できます。これがオニオンアーキテクチャの大きなメリットの1つです！
 
 ### 6.2 技術スタックの変更が容易
 

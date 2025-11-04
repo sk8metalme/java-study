@@ -91,6 +91,8 @@ package com.minislack.domain.model.user;
 import java.time.LocalDateTime;
 import java.util.Objects;
 
+import org.springframework.lang.NonNull;
+
 public class User {
     private final UserId userId;
     private Username username;
@@ -101,28 +103,28 @@ public class User {
     private LocalDateTime updatedAt;
 
     // 新規ユーザー作成用コンストラクタ
-    public User(UserId userId, Username username, Email email, 
-                Password password, DisplayName displayName) {
-        this.userId = Objects.requireNonNull(userId);
-        this.username = Objects.requireNonNull(username);
-        this.email = Objects.requireNonNull(email);
-        this.password = Objects.requireNonNull(password);
-        this.displayName = Objects.requireNonNull(displayName);
+    public User(@NonNull UserId userId, @NonNull Username username, @NonNull Email email, 
+                @NonNull Password password, @NonNull DisplayName displayName) {
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
+        this.username = Objects.requireNonNull(username, "username must not be null");
+        this.email = Objects.requireNonNull(email, "email must not be null");
+        this.password = Objects.requireNonNull(password, "password must not be null");
+        this.displayName = Objects.requireNonNull(displayName, "displayName must not be null");
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
     }
 
     // 既存ユーザー復元用コンストラクタ（リポジトリから取得時）
-    public User(UserId userId, Username username, Email email, 
-                Password password, DisplayName displayName,
-                LocalDateTime createdAt, LocalDateTime updatedAt) {
-        this.userId = Objects.requireNonNull(userId);
-        this.username = Objects.requireNonNull(username);
-        this.email = Objects.requireNonNull(email);
-        this.password = Objects.requireNonNull(password);
-        this.displayName = Objects.requireNonNull(displayName);
-        this.createdAt = Objects.requireNonNull(createdAt);
-        this.updatedAt = Objects.requireNonNull(updatedAt);
+    public User(@NonNull UserId userId, @NonNull Username username, @NonNull Email email, 
+                @NonNull Password password, @NonNull DisplayName displayName,
+                @NonNull LocalDateTime createdAt, @NonNull LocalDateTime updatedAt) {
+        this.userId = Objects.requireNonNull(userId, "userId must not be null");
+        this.username = Objects.requireNonNull(username, "username must not be null");
+        this.email = Objects.requireNonNull(email, "email must not be null");
+        this.password = Objects.requireNonNull(password, "password must not be null");
+        this.displayName = Objects.requireNonNull(displayName, "displayName must not be null");
+        this.createdAt = Objects.requireNonNull(createdAt, "createdAt must not be null");
+        this.updatedAt = Objects.requireNonNull(updatedAt, "updatedAt must not be null");
     }
 
     // ビジネスロジック: パスワード変更
@@ -163,6 +165,189 @@ public class User {
     }
 }
 ```
+
+#### なぜコンストラクタを分けるのか？
+
+**2つのコンストラクタを分ける理由**を詳しく説明します。
+
+##### 1. 異なるライフサイクル（生成 vs 復元）
+
+```java
+// パターン1: 新規作成（アプリケーション層）
+User newUser = new User(
+    UserId.newId(),
+    new Username("taro"),
+    new Email("taro@example.com"),
+    password,
+    new DisplayName("太郎")
+);
+// → createdAt, updatedAt は「今」になる
+
+// パターン2: 復元（インフラ層・リポジトリから）
+User existingUser = new User(
+    UserId.of("abc-123"),
+    new Username("taro"),
+    new Email("taro@example.com"),
+    password,
+    new DisplayName("太郎"),
+    LocalDateTime.of(2024, 1, 1, 10, 0, 0),  // DBに保存されていた作成日時
+    LocalDateTime.of(2024, 6, 15, 14, 30, 0) // DBに保存されていた更新日時
+);
+// → 元の日時を保持する
+```
+
+##### 2. 不変条件（Invariant）の保護
+
+**新規作成時のルール**:
+- ✅ 作成日時 = 現在時刻
+- ✅ 更新日時 = 現在時刻
+- ✅ 作成日時 = 更新日時（新規作成なので同じ）
+
+**復元時のルール**:
+- ✅ 元の日時をそのまま保持
+- ✅ createdAt ≤ updatedAt が保証される
+
+##### 3. 採用しなかった代替案とその理由
+
+**代替案: createdAt/updatedAtのnullチェックで判定**
+
+```java
+// ❌ この方法は採用していません
+public User(UserId userId, Username username, Email email, 
+            Password password, DisplayName displayName,
+            LocalDateTime createdAt, LocalDateTime updatedAt) {
+    this.userId = Objects.requireNonNull(userId);
+    this.username = Objects.requireNonNull(username);
+    this.email = Objects.requireNonNull(email);
+    this.password = Objects.requireNonNull(password);
+    this.displayName = Objects.requireNonNull(displayName);
+    
+    // createdAt が null なら新規作成と判定
+    if (createdAt == null || updatedAt == null) {
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now();
+    } else {
+        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
+    }
+}
+```
+
+**採用しない理由**:
+
+**理由1: Null許容の問題（@NonNull契約を破る）**
+
+```java
+// ドメインモデルは原則すべて @NonNull
+private final LocalDateTime createdAt; // null許容すべきではない
+
+// しかし、nullチェック方式だとnullを受け入れる必要がある
+public User(..., @Nullable LocalDateTime createdAt, ...) // ← 妥協が必要
+```
+
+**理由2: 型システムで保証できない（コンパイル時検証不可）**
+
+```java
+// コンパイルは通るが、意図しない呼び出しを防げない
+User user = new User(userId, username, email, password, displayName, null, null);
+// → 新規作成のつもりだが、明示的ではない
+```
+
+**理由3: 隠れたロジック（コンストラクタ内に分岐）**
+
+```java
+// コンストラクタ内に「if」がある = 複雑性の増加
+// ドメインモデルはシンプルに保つべき
+if (createdAt == null || updatedAt == null) {
+    // 隠れた振る舞い
+}
+```
+
+**理由4: 意図が不明確**
+
+```java
+// ❌ どちらのパターンか一目で分からない
+User user = new User(userId, username, email, password, displayName, null, null);
+
+// ✅ コンストラクタの引数の数で意図が明確
+User newUser = new User(userId, username, email, password, displayName);
+User existingUser = new User(userId, username, email, password, displayName, 
+                             createdAt, updatedAt);
+```
+
+**理由5: エラーが遅延（実行時まで問題が分からない）**
+
+```java
+// コンパイルは通るが、実行時に問題が発生する可能性
+User user = new User(userId, username, email, password, displayName, 
+                     null, LocalDateTime.now()); // createdAtだけnull
+// → updatedAtだけ設定されるバグが混入しやすい
+```
+
+**理由6: ドメインモデルの純粋性**
+
+```java
+// ドメインモデルは「ビジネスルール」を表現すべき
+// 「nullチェック」は技術的詳細であり、ビジネスロジックではない
+
+// ✅ ビジネスの言葉で表現
+User newUser = new User(...); // 「新規ユーザーを作成する」
+User existingUser = new User(..., createdAt, updatedAt); // 「既存ユーザーを復元する」
+```
+
+##### 4. 実際の使用例
+
+**アプリケーション層（新規作成）**:
+```java
+@Service
+public class UserRegistrationService {
+    @Transactional
+    public UserId registerUser(RegisterUserCommand command) {
+        // 新規作成用コンストラクタ（意図が明確）
+        User user = new User(
+            UserId.newId(),
+            new Username(command.getUsername()),
+            new Email(command.getEmail()),
+            Password.fromRawPassword(command.getPassword(), encoder),
+            new DisplayName(command.getDisplayName())
+        );
+        
+        return userRepository.save(user).getUserId();
+    }
+}
+```
+
+**インフラ層（復元）**:
+```java
+@Repository
+public class UserRepositoryImpl implements IUserRepository {
+    @Override
+    public Optional<User> findById(UserId userId) {
+        return jpaRepository.findById(userId.getValue())
+            .map(entity -> new User(
+                UserId.of(entity.getId()),
+                new Username(entity.getUsername()),
+                new Email(entity.getEmail()),
+                Password.fromHashedValue(entity.getPassword()),
+                new DisplayName(entity.getDisplayName()),
+                entity.getCreatedAt(),  // DBから取得した値を保持
+                entity.getUpdatedAt()   // DBから取得した値を保持
+            ));
+    }
+}
+```
+
+##### 5. まとめ: コンストラクタ分離のメリット
+
+| 観点 | 2つのコンストラクタ | nullチェック方式 |
+|-----|------------------|----------------|
+| **Null安全性** | ✅ すべて@NonNull | ❌ nullを許容 |
+| **意図の明確性** | ✅ 一目で分かる | ❌ 不明確 |
+| **コンパイル時検証** | ✅ 型で保証 | ❌ 実行時まで不明 |
+| **シンプルさ** | ✅ 分岐なし | ❌ 内部に分岐 |
+| **ドメインの純粋性** | ✅ Pure Java | ❌ 技術的詳細が混入 |
+
+**結論**: MiniSlackでは、**型安全性**、**意図の明確性**、**ドメインモデルの純粋性**を優先し、2つのコンストラクタを使用します。
 
 ### 3.2 Channel（チャンネル）
 

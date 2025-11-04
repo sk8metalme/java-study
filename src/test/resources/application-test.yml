@@ -9,21 +9,12 @@ spring:
     hibernate:
       ddl-auto: create-drop
     show-sql: true
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.H2Dialect
-        format_sql: true
+    database-platform: org.hibernate.dialect.H2Dialect
 
   rabbitmq:
     host: localhost
     port: 5672
 
-  sql:
-    init:
-      mode: never
-
 logging:
   level:
-    root: INFO
     com.minislack: DEBUG
-    org.springframework.test: INFO
