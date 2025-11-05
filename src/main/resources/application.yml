@@ -8,10 +8,6 @@ spring:
     username: minislack
     password: password
     driver-class-name: org.postgresql.Driver
-    hikari:
-      maximum-pool-size: 10
-      minimum-idle: 5
-      connection-timeout: 30000
 
   # JPA設定
   jpa:
@@ -22,10 +18,6 @@ spring:
       hibernate:
         format_sql: true
         dialect: org.hibernate.dialect.PostgreSQLDialect
-        jdbc:
-          batch_size: 20
-          time_zone: UTC
-    open-in-view: false
 
   # RabbitMQ設定
   rabbitmq:
@@ -33,20 +25,6 @@ spring:
     port: 5672
     username: minislack
     password: password
-    listener:
-      simple:
-        acknowledge-mode: auto
-        prefetch: 10
-        retry:
-          enabled: true
-          initial-interval: 1000
-          max-attempts: 3
-
-  # Thymeleaf設定
-  thymeleaf:
-    cache: false
-    prefix: classpath:/templates/
-    suffix: .html
 
   # Actuator設定
   management:
@@ -54,32 +32,15 @@ spring:
       web:
         exposure:
           include: health,metrics,info
-    endpoint:
-      health:
-        show-details: when-authorized
 
 # サーバー設定
 server:
   port: 8080
-  error:
-    include-message: always
-    include-binding-errors: always
-  compression:
-    enabled: true
-
-# JWT設定
-jwt:
-  secret: ${JWT_SECRET:minislack-secret-key-please-change-in-production-environment}
-  expiration: 86400000 # 24時間（ミリ秒）
 
 # ロギング設定
 logging:
   level:
-    root: INFO
     com.minislack: DEBUG
     org.springframework.web: INFO
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
-  pattern:
-    console: '%d{yyyy-MM-dd HH:mm:ss} - %msg%n'
-    file: '%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n'
