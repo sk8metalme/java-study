@@ -920,7 +920,7 @@ Could not resolve all dependencies
 
 ### 11.5 RabbitMQ関連のコンパイルエラー
 
-```
+```text
 エラー: パッケージorg.springframework.amqp.coreは存在しません
 import org.springframework.amqp.core.Queue;
 ```
@@ -940,7 +940,7 @@ dependencies {
 
 ### 11.6 import文の不足によるコンパイルエラー
 
-```
+```text
 エラー: シンボルを見つけられません
   シンボル:   クラス TestRepository
   場所: クラス HealthController

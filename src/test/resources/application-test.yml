@@ -17,4 +17,5 @@ spring:
 
 logging:
   level:
+    root: WARN
     com.minislack: DEBUG

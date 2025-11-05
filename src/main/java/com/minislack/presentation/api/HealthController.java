@@ -14,6 +14,13 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * ヘルスチェック・動作確認用コントローラー
+ * 
+ * 注意: このコントローラーは動作確認用です。
+ * 本番実装では、Presentation層がInfrastructure層に直接依存すべきではありません。
+ * Application層を経由してビジネスロジックを実行してください。
+ */
 @RestController
 @RequestMapping("/api")
 public class HealthController {
@@ -26,9 +33,14 @@ public class HealthController {
         this.testPublisher = testPublisher;
     }
 
+    /**
+     * ヘルスチェックエンドポイント
+     * アプリケーションとデータベースの接続状態を確認
+     * 
+     * @return ステータス情報（status, timestamp, message, dbRecordCount）
+     */
     @GetMapping("/health")
     public Map<String,Object> health() {
-
         Map<String, Object> response = new HashMap<>();
         response.put("status", "OK");
         response.put("timestamp", LocalDateTime.now());
@@ -37,6 +49,13 @@ public class HealthController {
         return response;
     }
 
+    /**
+     * テストデータ作成エンドポイント
+     * PostgreSQL接続確認用
+     * 
+     * @param body リクエストボディ（name: テストデータの名前）
+     * @return 作成されたTestEntity
+     */
     @PostMapping("/test")
     public TestEntity createTest(@RequestBody Map<String, String> body) {
         TestEntity entity = new TestEntity();
@@ -44,6 +63,13 @@ public class HealthController {
         return testRepository.save(entity);
     }
 
+    /**
+     * RabbitMQテストエンドポイント
+     * メッセージキュー接続確認用
+     * 
+     * @param body リクエストボディ（message: 送信するメッセージ）
+     * @return ステータス情報
+     */
     @PostMapping("/rabbitmq-test")
     public Map<String, String> testRabbitMQ(@RequestBody Map<String, String> body) {
         String message = body.get("message");
