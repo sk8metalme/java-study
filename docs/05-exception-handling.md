@@ -46,10 +46,820 @@ RuntimeException
 
 ### 2.2 なぜRuntimeExceptionを継承するのか？
 
-**理由**:
-- Checked Exceptionは上位レイヤーに依存を強制する
-- オニオンアーキテクチャの依存性ルールを守るため
-- Spring Bootのトランザクション管理との相性が良い
+**理由1: Checked Exceptionは上位レイヤーに依存を強制する**
+
+Checked Exceptionを使うと、すべての呼び出し元で`throws`句が必要になり、オニオンアーキテクチャの依存性ルールを守れなくなります。
+
+**理由2: オニオンアーキテクチャの依存性ルールを守るため**
+
+ドメイン層がフレームワーク非依存を保つためには、RuntimeExceptionが適しています。
+
+**理由3: Spring Bootのトランザクション管理との相性が良い**
+
+これが最も重要な理由です。詳しく説明します。
+
+#### Spring Bootのトランザクション管理とRuntimeException
+
+Spring Bootの`@Transactional`は、例外の種類によってロールバック動作が異なります：
+
+| 例外の種類 | デフォルト動作 |
+|-----------|-------------|
+| **RuntimeException** | ✅ **自動ロールバック** |
+| **Checked Exception** | ❌ **コミット（ロールバックしない）** |
+
+**実際のコード例（RuntimeException - 推奨）**:
+
+```java
+@Service
+public class UserRegistrationService {
+    
+    @Transactional  // ← rollbackForの指定が不要！
+    public UserId registerUser(RegisterUserCommand command) {
+        Email email = new Email(command.getEmail());
+        
+        // メール重複チェック
+        if (userRepository.existsByEmail(email)) {
+            // RuntimeException → 自動的にロールバック
+            throw new DuplicateResourceException("Email already exists");
+        }
+        
+        User user = new User(...);
+        userRepository.save(user);  // ← 上でエラーなら保存されない
+        
+        return user.getUserId();
+    }
+}
+```
+
+**動作**:
+1. `DuplicateResourceException`（RuntimeException）がスローされる
+2. Spring Bootが自動的にトランザクションをロールバック
+3. データベースへの保存がキャンセルされる
+
+**Checked Exceptionの場合（非推奨）**:
+
+```java
+@Service
+public class UserRegistrationService {
+    
+    // すべての例外を列挙する必要がある（面倒＆エラーの原因）
+    @Transactional(rollbackFor = {
+        DuplicateEmailException.class,
+        InvalidUserDataException.class,
+        // ... 増え続ける例外クラス
+    })
+    public UserId registerUser(...) throws DuplicateEmailException, 
+                                           InvalidUserDataException {
+        // ...
+    }
+}
+```
+
+**問題点**:
+- ❌ すべてのメソッドで`rollbackFor`を指定する必要がある
+- ❌ 新しい例外を追加する度に`rollbackFor`も更新が必要
+- ❌ 指定漏れでバグが発生しやすい（データ不整合の原因）
+- ❌ コードが冗長になる
+
+#### トランザクション動作の違い
+
+**RuntimeExceptionの場合（推奨）**:
+
+```java
+@Transactional
+public void createUserAndChannel() {
+    // 1. ユーザー作成
+    User user = new User(...);
+    userRepository.save(user);  // コミット前
+    
+    // 2. チャンネル作成
+    Channel channel = new Channel(...);
+    channelRepository.save(channel);  // コミット前
+    
+    // 3. メンバーシップ作成
+    if (membershipRepository.existsByChannelAndUser(channelId, userId)) {
+        // RuntimeException発生 → 自動ロールバック
+        throw new DuplicateResourceException("Already a member");
+    }
+    
+    // → トランザクション全体がロールバック
+    // → user, channelも保存されない（データ整合性が保たれる）
+}
+```
+
+**Checked Exceptionの場合（rollbackFor指定なし - 危険）**:
+
+```java
+@Transactional  // rollbackForの指定漏れ！
+public void createUserAndChannel() throws DuplicateMemberException {
+    // 1. ユーザー作成
+    User user = new User(...);
+    userRepository.save(user);  // コミット前
+    
+    // 2. チャンネル作成
+    Channel channel = new Channel(...);
+    channelRepository.save(channel);  // コミット前
+    
+    // 3. メンバーシップ作成
+    if (membershipRepository.existsByChannelAndUser(channelId, userId)) {
+        // Checked Exception発生 → デフォルトではコミット！
+        throw new DuplicateMemberException("Already a member");
+    }
+    
+    // → トランザクションがコミットされる！
+    // → user, channelが保存される（データ不整合が発生！）
+}
+```
+
+#### Spring Bootの内部動作（簡略版）
+
+```java
+// Spring Bootのトランザクション管理の内部実装（簡略版）
+public Object invoke(MethodInvocation invocation) {
+    TransactionStatus status = transactionManager.getTransaction(txAttr);
+    Object result = null;
+    try {
+        result = invocation.proceed();  // メソッド実行
+        transactionManager.commit(status);  // 正常終了 → コミット
+    } catch (RuntimeException | Error ex) {
+        // RuntimeExceptionとErrorは自動ロールバック
+        transactionManager.rollback(status);
+        throw ex;
+    } catch (Throwable ex) {
+        // Checked ExceptionはrollbackFor指定がなければコミット
+        if (txAttr.rollbackOn(ex)) {
+            transactionManager.rollback(status);
+        } else {
+            transactionManager.commit(status);  // ← 危険！
+        }
+        throw ex;
+    }
+    return result;
+}
+```
+
+#### まとめ：RuntimeExceptionを使う理由
+
+| 観点 | RuntimeException | Checked Exception |
+|-----|-----------------|------------------|
+| **ロールバック** | ✅ 自動 | ❌ 明示的指定が必要 |
+| **設定** | ✅ `@Transactional`のみ | ❌ `rollbackFor`必須 |
+| **保守性** | ✅ 新しい例外を追加しやすい | ❌ 常に`rollbackFor`更新が必要 |
+| **安全性** | ✅ 設定漏れのリスクなし | ❌ 設定漏れでデータ不整合 |
+| **シンプルさ** | ✅ コードが簡潔 | ❌ コードが冗長 |
+
+**結論**: Spring Bootの`@Transactional`は**RuntimeExceptionで自動ロールバック**するため、ビジネスロジックのエラーをRuntimeExceptionで表現することで、トランザクション管理が自然かつ安全に行えます。
+
+---
+
+## 2.3 ビジネスルール違反 vs バリデーションエラーの違い
+
+この2つはよく混同されますが、本質的に異なります。違いを理解することが重要です。
+
+### 2.3.1 本質的な違い
+
+| 観点 | バリデーションエラー | ビジネスルール違反 |
+|-----|---------------------|-------------------|
+| **何をチェック？** | **単一の値**の形式・範囲 | **複数のオブジェクト間の関係**や状態 |
+| **いつチェック？** | **オブジェクト生成時** | **ビジネスロジック実行時** |
+| **どこで実装？** | **値オブジェクト**のコンストラクタ | **エンティティ**のメソッドまたは**ドメインサービス** |
+| **コンテキスト** | **コンテキスト不要**（値だけで判断） | **コンテキスト必要**（他のオブジェクトや状態が必要） |
+| **例外** | `IllegalArgumentException` | `BusinessRuleViolationException` |
+| **DB参照** | 不要 | 必要な場合が多い |
+
+### 2.3.2 具体例1: メールアドレス
+
+**バリデーションエラー（値オブジェクト）**:
+```java
+public class Email {
+    private static final Pattern EMAIL_PATTERN = 
+        Pattern.compile("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
+    
+    public Email(String value) {
+        // 単一の値の形式チェック（コンテキスト不要）
+        if (!EMAIL_PATTERN.matcher(value).matches()) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException("Invalid email format");
+        }
+        this.value = value;
+    }
+}
+```
+
+**ビジネスルール違反（アプリケーションサービス）**:
+```java
+@Service
+public class UserRegistrationService {
+    
+    @Transactional
+    public UserId registerUser(RegisterUserCommand command) {
+        Email email = new Email(command.getEmail());  // ← 形式チェック（バリデーション）
+        
+        // 他のオブジェクト（データベース）との関係チェック（コンテキスト必要）
+        if (userRepository.existsByEmail(email)) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "Email already exists in the system"
+            );
+        }
+        
+        // ...
+    }
+}
+```
+
+**違い**:
+- バリデーション: `"test@example.com"`という文字列が**メールアドレスの形式として正しいか**
+- ビジネスルール: `"test@example.com"`が**システム内で重複していないか**（データベース参照が必要）
+
+### 2.3.3 具体例2: パスワード
+
+**バリデーションエラー（値オブジェクト）**:
+```java
+public class Password {
+    private static final int MIN_LENGTH = 8;
+    
+    public static Password fromRawPassword(String rawPassword, IPasswordEncoder encoder) {
+        // 単純な文字数チェック（コンテキスト不要）
+        if (rawPassword.length() < MIN_LENGTH) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException(
+                "Password must be at least " + MIN_LENGTH + " characters"
+            );
+        }
+        
+        String hashed = encoder.encode(rawPassword);
+        return new Password(hashed);
+    }
+}
+```
+
+**ビジネスルール違反（エンティティ）**:
+```java
+public class User {
+    private Password password;
+    
+    public void changePassword(Password currentPassword, Password newPassword) {
+        // 現在のパスワードとの比較（他のオブジェクト状態が必要）
+        if (!this.password.matches(currentPassword)) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "Current password is incorrect"
+            );
+        }
+        
+        // 新旧パスワードの比較（関係性のチェック）
+        if (this.password.equals(newPassword)) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "New password must be different from current password"
+            );
+        }
+        
+        this.password = newPassword;
+    }
+}
+```
+
+**違い**:
+- バリデーション: パスワードが**8文字以上か**（値単体で判断）
+- ビジネスルール: パスワードが**現在のパスワードと一致するか**（他の情報が必要）
+
+### 2.3.4 具体例3: チャンネル名
+
+**バリデーションエラー（値オブジェクト）**:
+```java
+public class ChannelName {
+    private static final int MIN_LENGTH = 4;
+    private static final int MAX_LENGTH = 50;
+    
+    public ChannelName(String value) {
+        // 文字数の範囲チェック（コンテキスト不要）
+        if (value.length() < MIN_LENGTH || value.length() > MAX_LENGTH) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException(
+                "Channel name must be 4-50 characters"
+            );
+        }
+        
+        // 使用可能文字のチェック（コンテキスト不要）
+        if (!value.matches("^[a-z0-9-]+$")) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException(
+                "Channel name must contain only lowercase, numbers, and hyphens"
+            );
+        }
+        
+        this.value = value;
+    }
+}
+```
+
+**ビジネスルール違反（アプリケーションサービス）**:
+```java
+@Service
+public class ChannelManagementService {
+    
+    @Transactional
+    public ChannelId createChannel(CreateChannelCommand command, UserId creatorId) {
+        ChannelName channelName = new ChannelName(command.getName());  // ← バリデーション
+        
+        // システム内での一意性チェック（データベース参照が必要）
+        if (channelRepository.existsByName(channelName)) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "Channel name already exists: " + channelName.getValue()
+            );
+        }
+        
+        // ユーザーが作成できるチャンネル数の制限（複数の情報が必要）
+        long channelCount = channelRepository.countByCreator(creatorId);
+        if (channelCount >= 10) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "User has reached maximum channel creation limit (10)"
+            );
+        }
+        
+        // ...
+    }
+}
+```
+
+**違い**:
+- バリデーション: 「general」という文字列が**チャンネル名として形式的に正しいか**
+- ビジネスルール: 「general」という名前が**既に使われていないか**、**ユーザーがこれ以上作成できるか**
+
+### 2.3.5 具体例4: メッセージ投稿
+
+**バリデーションエラー（値オブジェクト）**:
+```java
+public class MessageContent {
+    private static final int MAX_LENGTH = 2000;
+    
+    public MessageContent(String value) {
+        // 空文字チェック（コンテキスト不要）
+        if (value == null || value.isBlank()) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException(
+                "Message content must not be empty"
+            );
+        }
+        
+        // 長さチェック（コンテキスト不要）
+        if (value.length() > MAX_LENGTH) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException(
+                "Message content must not exceed 2000 characters"
+            );
+        }
+        
+        this.value = value;
+    }
+}
+```
+
+**ビジネスルール違反（アプリケーションサービス）**:
+```java
+@Service
+public class MessageService {
+    
+    @Transactional
+    public MessageId sendMessage(SendMessageCommand command, UserId senderId) {
+        ChannelId channelId = new ChannelId(command.getChannelId());
+        MessageContent content = new MessageContent(command.getContent());  // ← バリデーション
+        
+        // チャンネルの存在確認（データベース参照が必要）
+        Channel channel = channelRepository.findById(channelId)
+            .orElseThrow(() -> new ResourceNotFoundException("Channel", channelId.getValue()));
+        
+        // 削除済みチャンネルへの投稿禁止（状態チェック）
+        if (channel.isDeleted()) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "Cannot send messages to a deleted channel"
+            );
+        }
+        
+        // メンバーシップ確認（複数オブジェクト間の関係）
+        if (!membershipRepository.existsByChannelAndUser(channelId, senderId)) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "User is not a member of this channel"
+            );
+        }
+        
+        // レート制限（時間的制約）
+        long recentMessageCount = messageRepository.countByUserSince(
+            senderId, 
+            LocalDateTime.now().minusMinutes(1)
+        );
+        if (recentMessageCount >= 10) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "Rate limit exceeded: maximum 10 messages per minute"
+            );
+        }
+        
+        // ...
+    }
+}
+```
+
+**違い**:
+- バリデーション: メッセージ本文が**2000文字以内か**
+- ビジネスルール: ユーザーが**そのチャンネルのメンバーか**、**チャンネルが削除されていないか**、**レート制限を超えていないか**
+
+### 2.3.6 判断基準フローチャート
+
+```
+エラーをチェックしたい
+    ↓
+【質問1】単一の値だけで判断できる？
+    YES → バリデーションエラー（値オブジェクト）
+    NO → ↓
+    
+【質問2】他のオブジェクトや状態が必要？
+    YES → ビジネスルール違反（エンティティ/ドメインサービス）
+    NO → ↓
+    
+【質問3】データベースへの問い合わせが必要？
+    YES → ビジネスルール違反（ドメインサービス/アプリケーションサービス）
+    NO → バリデーションエラー（値オブジェクト）
+```
+
+### 2.3.7 実装場所の違い
+
+**バリデーションエラー（値オブジェクト）**:
+
+```java
+// 値オブジェクトのコンストラクタ内
+public class Username {
+    private static final Pattern VALID_PATTERN = Pattern.compile("^[a-zA-Z0-9_]{3,20}$");
+    
+    public Username(String value) {
+        // ここでバリデーション
+        if (!VALID_PATTERN.matcher(value).matches()) {
+            throw new IllegalArgumentException(
+                "Username must be 3-20 characters and contain only alphanumeric and underscore"
+            );
+        }
+        this.value = value;
+    }
+}
+```
+
+**特徴**:
+- ✅ オブジェクト生成時に自動的にチェック
+- ✅ 不正な値を持つオブジェクトは存在できない（不変条件）
+- ✅ 再利用可能（どこでも同じルール）
+- ✅ データベースアクセス不要（高速）
+
+**ビジネスルール違反（エンティティ/ドメインサービス）**:
+
+```java
+// エンティティのビジネスロジックメソッド内
+public class User {
+    public void changePassword(Password current, Password newPass) {
+        // ここでビジネスルールチェック
+        if (!this.password.matches(current)) {
+            throw new BusinessRuleViolationException(
+                "Current password is incorrect"
+            );
+        }
+        this.password = newPass;
+    }
+}
+
+// または、ドメインサービス内
+public class ChannelMembershipService {
+    public ChannelMembership joinChannel(UserId userId, ChannelId channelId) {
+        // ここでビジネスルールチェック
+        if (membershipRepository.existsByChannelAndUser(channelId, userId)) {
+            throw new BusinessRuleViolationException(
+                "User is already a member of this channel"
+            );
+        }
+        // ...
+    }
+}
+```
+
+**特徴**:
+- ✅ ビジネスロジック実行時にチェック
+- ✅ 複数のオブジェクトの状態や関係を考慮
+- ✅ コンテキスト依存
+- ⚠️ データベースアクセスが必要な場合がある
+
+### 2.3.8 より多くの具体例
+
+#### 例1: ユーザー名
+
+**バリデーション**:
+```java
+Username username = new Username("a");  
+// ❌ IllegalArgumentException: "Username must be 3-20 characters"
+// 理由: 文字数が足りない（値単体で判断）
+
+Username username = new Username("user@name");  
+// ❌ IllegalArgumentException: "Username must contain only alphanumeric and underscore"
+// 理由: 使用禁止文字が含まれている（値単体で判断）
+```
+
+**ビジネスルール違反**:
+```java
+Username username = new Username("taro");  // ✅ 形式は正しい
+
+// でも、既に使われている場合
+if (userRepository.existsByUsername(username)) {
+    // ❌ BusinessRuleViolationException: "Username already taken"
+    // 理由: システム内で重複（データベース参照が必要）
+    throw new BusinessRuleViolationException("Username already taken");
+}
+```
+
+#### 例2: チャンネルへの参加
+
+**バリデーション**:
+```java
+ChannelId channelId = new ChannelId("");
+// ❌ IllegalArgumentException: "ChannelId must not be blank"
+// 理由: 空文字（値単体で判断）
+
+UserId userId = new UserId("invalid-uuid-format");
+// ❌ IllegalArgumentException: "Invalid UUID format"
+// 理由: UUID形式ではない（値単体で判断）
+```
+
+**ビジネスルール違反**:
+```java
+ChannelId channelId = new ChannelId("ch-123");  // ✅ 形式は正しい
+UserId userId = new UserId("user-456");  // ✅ 形式は正しい
+
+// ビジネスルールのチェック（複数オブジェクトの関係）
+Channel channel = channelRepository.findById(channelId)
+    .orElseThrow(() -> new ResourceNotFoundException("Channel", channelId.getValue()));
+
+// ルール1: チャンネルが削除されていないか
+if (channel.isDeleted()) {
+    // ❌ BusinessRuleViolationException
+    throw new BusinessRuleViolationException(
+        "Cannot join deleted channel"
+    );
+}
+
+// ルール2: プライベートチャンネルは招待が必要
+if (!channel.isPublic() && !hasInvitation(userId, channelId)) {
+    // ❌ BusinessRuleViolationException
+    throw new BusinessRuleViolationException(
+        "Private channel requires invitation"
+    );
+}
+
+// ルール3: 既にメンバーでないか
+if (membershipRepository.existsByChannelAndUser(channelId, userId)) {
+    // ❌ BusinessRuleViolationException
+    throw new BusinessRuleViolationException(
+        "User is already a member of this channel"
+    );
+}
+
+// ルール4: メンバー数上限チェック
+if (membershipRepository.countByChannel(channelId) >= 100) {
+    // ❌ BusinessRuleViolationException
+    throw new BusinessRuleViolationException(
+        "Channel has reached member limit (100)"
+    );
+}
+```
+
+#### 例3: 金額（より分かりやすい例）
+
+**バリデーションエラー**:
+```java
+public class Amount {
+    public Amount(BigDecimal value) {
+        // 値の範囲チェック（値単体で判断）
+        if (value.compareTo(BigDecimal.ZERO) < 0) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException(
+                "Amount cannot be negative"
+            );
+        }
+        
+        if (value.scale() > 2) {
+            // ✅ バリデーションエラー
+            throw new IllegalArgumentException(
+                "Amount cannot have more than 2 decimal places"
+            );
+        }
+        
+        this.value = value;
+    }
+}
+```
+
+**ビジネスルール違反**:
+```java
+public class BankAccount {
+    private Amount balance;
+    
+    public void withdraw(Amount amount) {
+        // 残高との比較（他の状態が必要）
+        if (this.balance.isLessThan(amount)) {
+            // ✅ ビジネスルール違反
+            throw new BusinessRuleViolationException(
+                "Insufficient balance for withdrawal"
+            );
+        }
+        
+        this.balance = this.balance.subtract(amount);
+    }
+}
+```
+
+**違い**:
+- バリデーション: `1000.00`という値が**金額として正しい形式か**（負数でない、小数点以下2桁以内）
+- ビジネスルール: 口座から`1000.00`を**引き出せるだけの残高があるか**（残高との比較が必要）
+
+### 2.3.9 ビジネスルール違反のパターン集
+
+MiniSlackで発生する可能性のあるビジネスルール違反を分類：
+
+#### パターン1: 状態遷移の違反
+
+ビジネスルール: 「削除済みのチャンネルにはメッセージを送信できない」
+
+```java
+public class Channel {
+    private ChannelStatus status;  // ACTIVE, ARCHIVED, DELETED
+    
+    public void verifyCanReceiveMessage() {
+        if (this.status == ChannelStatus.DELETED) {
+            throw new BusinessRuleViolationException(
+                "Cannot send messages to a deleted channel"
+            );
+        }
+    }
+}
+```
+
+#### パターン2: 数量制限の違反
+
+ビジネスルール: 「1つのチャンネルのメンバー数は最大100人まで」
+
+```java
+public class ChannelMembershipService {
+    private static final int MAX_MEMBERS = 100;
+    
+    public ChannelMembership joinChannel(UserId userId, ChannelId channelId) {
+        long currentMemberCount = membershipRepository.countByChannel(channelId);
+        
+        if (currentMemberCount >= MAX_MEMBERS) {
+            throw new BusinessRuleViolationException(
+                "Channel has reached maximum member limit (100)"
+            );
+        }
+        
+        // ... メンバー追加処理
+    }
+}
+```
+
+#### パターン3: 時間的制約の違反
+
+ビジネスルール: 「メッセージは送信後24時間以内のみ削除可能」
+
+```java
+public class Message {
+    private LocalDateTime createdAt;
+    
+    public void verifyCanDelete() {
+        LocalDateTime now = LocalDateTime.now();
+        Duration elapsed = Duration.between(createdAt, now);
+        
+        if (elapsed.toHours() > 24) {
+            throw new BusinessRuleViolationException(
+                "Messages can only be deleted within 24 hours of posting"
+            );
+        }
+    }
+}
+```
+
+#### パターン4: 権限の違反
+
+ビジネスルール: 「チャンネル作成者のみがチャンネル情報を更新できる」
+
+```java
+public class Channel {
+    private UserId createdBy;
+    
+    public void updateInfo(ChannelName newName, Description newDesc, UserId requesterId) {
+        if (!this.createdBy.equals(requesterId)) {
+            throw new BusinessRuleViolationException(
+                "Only channel creator can update channel information"
+            );
+        }
+        
+        this.channelName = newName;
+        this.description = newDesc;
+        this.updatedAt = LocalDateTime.now();
+    }
+}
+```
+
+#### パターン5: 論理的整合性の違反
+
+ビジネスルール: 「同じユーザーが同じチャンネルに複数回参加できない」
+
+```java
+public class ChannelMembershipService {
+    
+    public ChannelMembership joinChannel(UserId userId, ChannelId channelId) {
+        // 既に参加している場合は違反
+        if (membershipRepository.existsByChannelAndUser(channelId, userId)) {
+            throw new BusinessRuleViolationException(
+                "User is already a member of this channel"
+            );
+        }
+        
+        // ... メンバー追加処理
+    }
+}
+```
+
+#### パターン6: 依存関係の違反
+
+ビジネスルール: 「メンバーがいるチャンネルは削除できない」
+
+```java
+public class ChannelDeletionService {
+    
+    public void deleteChannel(ChannelId channelId) {
+        long memberCount = membershipRepository.countByChannel(channelId);
+        
+        if (memberCount > 0) {
+            throw new BusinessRuleViolationException(
+                "Cannot delete channel with active members. " +
+                "Please remove all members first."
+            );
+        }
+        
+        channelRepository.delete(channelId);
+    }
+}
+```
+
+### 2.3.10 コンテキストの有無が決定的な違い
+
+**バリデーション（コンテキスト不要）**:
+
+```java
+// これだけで判断できる
+Email email = new Email("test@example.com");
+// → 形式チェック（正規表現マッチ）のみ
+
+Username username = new Username("taro");
+// → 長さと文字種チェックのみ
+
+ChannelName channelName = new ChannelName("general");
+// → 長さと使用可能文字チェックのみ
+```
+
+**ビジネスルール（コンテキスト必要）**:
+
+```java
+// 他の情報が必要
+if (userRepository.existsByEmail(email)) {  // ← データベースが必要
+    throw new BusinessRuleViolationException(...);
+}
+
+if (!this.password.matches(currentPassword)) {  // ← 現在の状態が必要
+    throw new BusinessRuleViolationException(...);
+}
+
+if (membershipRepository.countByChannel(channelId) >= 100) {  // ← 集計が必要
+    throw new BusinessRuleViolationException(...);
+}
+```
+
+### 2.3.11 まとめ表（決定版）
+
+| | バリデーションエラー | ビジネスルール違反 |
+|---|---------------------|-------------------|
+| **チェック対象** | 値の形式・範囲 | オブジェクト間の関係・状態 |
+| **判断基準** | 値だけで判断可能 | 他の情報が必要 |
+| **実装場所** | 値オブジェクト | エンティティ/ドメインサービス |
+| **タイミング** | オブジェクト生成時 | ビジネスロジック実行時 |
+| **例外** | `IllegalArgumentException` | `BusinessRuleViolationException` |
+| **DB参照** | 不要 | 必要な場合が多い |
+| **テスト** | 超高速（Pure Java） | 高速（モック使用） |
+| **例** | メール形式、文字数、正規表現 | 重複チェック、状態遷移、数量制限 |
+
+**ポイント**: 
+- **バリデーション** = 値が**技術的に正しいか**（形式、範囲）
+- **ビジネスルール** = 値が**ビジネス的に許可されるか**（関係、状態、制約）
 
 ---
 
