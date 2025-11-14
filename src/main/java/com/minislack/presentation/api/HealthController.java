@@ -66,14 +66,32 @@ public class HealthController {
     /**
      * RabbitMQテストエンドポイント
      * メッセージキュー接続確認用
-     * 
+     *
      * @param body リクエストボディ（message: 送信するメッセージ）
-     * @return ステータス情報
+     * @return ステータス情報（status, message, timestamp）
      */
     @PostMapping("/rabbitmq-test")
-    public Map<String, String> testRabbitMQ(@RequestBody Map<String, String> body) {
-        String message = body.get("message");
-        testPublisher.sendMessage(message);
-        return Map.of("status", "Message sent to RabbitMQ");
+    public Map<String, Object> testRabbitMQ(@RequestBody Map<String, String> body) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            String message = body.get("message");
+            if (message == null || message.trim().isEmpty()) {
+                response.put("status", "ERROR");
+                response.put("message", "メッセージが空です");
+                response.put("timestamp", LocalDateTime.now());
+                return response;
+            }
+
+            testPublisher.sendMessage(message);
+            response.put("status", "SUCCESS");
+            response.put("message", "Message sent to RabbitMQ successfully");
+            response.put("timestamp", LocalDateTime.now());
+            return response;
+        } catch (Exception e) {
+            response.put("status", "ERROR");
+            response.put("message", "RabbitMQへのメッセージ送信に失敗しました: " + e.getMessage());
+            response.put("timestamp", LocalDateTime.now());
+            return response;
+        }
     }
 }
